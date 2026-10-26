@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Piezómetros León</title>
+<meta name="theme-color" content="#1f4e79">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+<script src="https://unpkg.com/flatgeobuf@3.36.0/dist/flatgeobuf-geojson.min.js"></script>
+<style>
+  :root { --azul: #1f4e79; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #fff; }
+  #mapa { position: absolute; inset: 0; }
+  .panel { background: #fff; border-radius: 8px; box-shadow: 0 1px 6px rgba(0,0,0,.3); padding: 8px 10px; font-size: 13px; }
+  .leyenda .fila { display: flex; align-items: center; gap: 6px; margin: 3px 0; cursor: pointer; user-select: none; }
+  .leyenda .fila.off { opacity: .35; }
+  .leyenda .punto { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #333; }
+  .leyenda b { display: block; margin-bottom: 4px; }
+  .boton { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: #fff; border: none; border-radius: 6px; box-shadow: 0 1px 5px rgba(0,0,0,.35); cursor: pointer; font-size: 20px; }
+  .boton.activo { background: var(--azul); color: #fff; }
+  .popup h3 { margin: 0 0 4px; font-size: 15px; }
+  .popup .etq { display: inline-block; padding: 1px 7px; border-radius: 10px; color: #fff; font-size: 12px; margin-bottom: 6px; }
+  .popup table { border-collapse: collapse; font-size: 12px; }
+  .popup td { padding: 1px 6px 1px 0; vertical-align: top; }
+  .popup td:first-child { color: #666; white-space: nowrap; }
+  .popup ul { margin: 4px 0 6px; padding-left: 18px; font-size: 12px; }
+  .popup .accion { display: block; width: 100%; margin-top: 6px; padding: 8px; border: none; border-radius: 6px; background: var(--azul); color: #fff; font-size: 14px; cursor: pointer; }
+  #ruta { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 1000; display: none; min-width: 260px; max-width: calc(100% - 32px); }
+  #ruta .cab { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #ruta .datos { font-size: 16px; font-weight: 600; margin: 4px 0; }
+  #ruta .botones { display: flex; gap: 6px; margin-top: 6px; }
+  #ruta a, #ruta button { flex: 1; text-align: center; padding: 7px; border-radius: 6px; border: 1px solid var(--azul); font-size: 13px; text-decoration: none; cursor: pointer; }
+  #ruta a { background: var(--azul); color: #fff; }
+  #ruta button { background: #fff; color: var(--azul); }
+  #aviso { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1100; display: none; background: #333; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 13px; max-width: calc(100% - 32px); }
+  body.con-ruta .leyenda { display: none; }
+  .yo { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 3px solid #fff; box-shadow: 0 0 4px rgba(0,0,0,.5); box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="mapa"></div>
+<div id="aviso"></div>
+<div id="ruta" class="panel">
+  <div class="cab"><span id="ruta-destino"></span></div>
+  <div class="datos" id="ruta-datos"></div>
+  <div class="botones">
+    <a id="ruta-navegar" target="_blank" rel="noopener">Abrir en Google Maps</a>
+    <button id="ruta-quitar">Quitar ruta</button>
+  </div>
+</div>
+<script>
+proj4.defs("EPSG:25830", "+proj=utm +zone=30 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+
+const COLORES = { "Mantenimiento": "#2b8cbe", "Automatizacion": "#e6550d", "Nuevos Piezometros": "#31a354" };
+const NOMBRES = { "Automatizacion": "Automatización", "Nuevos Piezometros": "Nuevos piezómetros" };
+const color = a => COLORES[a] || "#756bb1";
+const nombre = a => NOMBRES[a] || a;
+const FIJOS = ["ACTUACION", "C.H", "CODIGO OFICIAL", "X", "Y", "TERMINO MUNICIPAL"];
+
+const mapa = L.map("mapa", { zoomControl: true }).setView([41.6, -4.5], 8);
+
+const pnoa = L.tileLayer("https://www.ign.es/wmts/pnoa-ma?layer=OI.OrthoimageCoverage&style=default&tilematrixset=GoogleMapsCompatible&Service=WMTS&Request=GetTile&Version=1.0.0&format=image/jpeg&TileMatrix={z}&TileRow={y}&TileCol={x}",
+  { maxZoom: 20, attribution: "PNOA © IGN" });
+const mtn = L.tileLayer.wms("https://www.ign.es/wms-inspire/mapa-raster",
+  { layers: "mtn_rasterizado", format: "image/png", maxZoom: 20, attribution: "MTN © IGN" });
+const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 19, attribution: "© OpenStreetMap" });
+pnoa.addTo(mapa);
+L.control.layers({ "PNOA máxima actualidad": pnoa, "MTN25": mtn, "OpenStreetMap": osm }, null, { position: "topright" }).addTo(mapa);
+L.control.scale({ imperial: false }).addTo(mapa);
+
+function aviso(txt, ms = 4000) {
+  const el = document.getElementById("aviso");
+  el.textContent = txt; el.style.display = "block";
+  clearTimeout(aviso.t); aviso.t = setTimeout(() => el.style.display = "none", ms);
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- Capa de actuaciones ----------
+const grupos = {};
+let todos = [];
+
+function popupHtml(p, i) {
+  const tareas = Object.keys(p).filter(k => !FIJOS.includes(k) && String(p[k]).trim() !== "");
+  const filas = [["Código", p["CODIGO OFICIAL"]], ["Municipio", p["TERMINO MUNICIPAL"]], ["Confederación", p["C.H"]],
+                 ["X / Y (ETRS89 H30)", `${p.X} / ${p.Y}`]]
+    .map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join("");
+  return `<div class="popup">
+    <h3>${esc(p["CODIGO OFICIAL"])}</h3>
+    <span class="etq" style="background:${color(p.ACTUACION)}">${esc(nombre(p.ACTUACION))}</span>
+    <table>${filas}</table>
+    ${tareas.length ? `<div style="margin-top:6px;font-size:12px;color:#666">Trabajos</div><ul>${tareas.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
+    <button class="accion" data-ruta="${i}">🚗 Cómo llegar</button>
+  </div>`;
+}
+
+async function cargarCapa() {
+  const r = await fetch("ACTUACIONES_25830.fgb");
+  if (!r.ok) throw new Error("No se pudo cargar la capa (" + r.status + ")");
+  const fc = flatgeobuf.deserialize(new Uint8Array(await r.arrayBuffer()));
+  const feats = fc.features || [];
+  feats.forEach((f, i) => {
+    const p = f.properties;
+    const [lon, lat] = proj4("EPSG:25830", "EPSG:4326", f.geometry.coordinates);
+    const m = L.circleMarker([lat, lon], { radius: 8, color: "#fff", weight: 2, fillColor: color(p.ACTUACION), fillOpacity: .95 })
+      .bindPopup(popupHtml(p, i), { maxWidth: 280 })
+      .bindTooltip(esc(p["CODIGO OFICIAL"]), { direction: "top", offset: [0, -6] });
+    m.datos = p;
+    todos.push(m);
+    (grupos[p.ACTUACION] ||= L.featureGroup().addTo(mapa)).addLayer(m);
+  });
+  mapa.fitBounds(L.featureGroup(todos).getBounds().pad(0.1));
+  leyenda();
+}
+
+function leyenda() {
+  const c = L.control({ position: "bottomleft" });
+  c.onAdd = () => {
+    const d = L.DomUtil.create("div", "panel leyenda");
+    d.innerHTML = "<b>Actuación</b>" + Object.keys(grupos).sort().map(a =>
+      `<div class="fila" data-a="${esc(a)}"><span class="punto" style="background:${color(a)}"></span>${esc(nombre(a))} (${grupos[a].getLayers().length})</div>`).join("");
+    L.DomEvent.disableClickPropagation(d);
+    d.addEventListener("click", e => {
+      const fila = e.target.closest(".fila"); if (!fila) return;
+      const g = grupos[fila.dataset.a];
+      if (mapa.hasLayer(g)) { mapa.removeLayer(g); fila.classList.add("off"); }
+      else { mapa.addLayer(g); fila.classList.remove("off"); }
+    });
+    return d;
+  };
+  c.addTo(mapa);
+}
+
+// ---------- Geolocalización ----------
+let yo = null, precision = null, posicion = null, vigilando = null, centrarAlLlegar = false;
+const iconoYo = L.divIcon({ className: "", html: '<div class="yo"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+
+function iniciarGeo() {
+  if (!navigator.geolocation) { aviso("Este navegador no permite la geolocalización"); return false; }
+  if (vigilando !== null) return true;
+  btnGeo.classList.add("activo");
+  vigilando = navigator.geolocation.watchPosition(pos => {
+    posicion = L.latLng(pos.coords.latitude, pos.coords.longitude);
+    if (!yo) {
+      yo = L.marker(posicion, { icon: iconoYo, zIndexOffset: 1000 }).bindTooltip("Mi ubicación").addTo(mapa);
+      precision = L.circle(posicion, { radius: pos.coords.accuracy, color: "#1a73e8", weight: 1, fillOpacity: .1, interactive: false }).addTo(mapa);
+    } else { yo.setLatLng(posicion); precision.setLatLng(posicion).setRadius(pos.coords.accuracy); }
+    if (centrarAlLlegar) { centrarAlLlegar = false; mapa.setView(posicion, Math.max(mapa.getZoom(), 14)); }
+    if (esperandoRuta !== null) { const i = esperandoRuta; esperandoRuta = null; calcularRuta(i); }
+  }, err => {
+    aviso(err.code === 1 ? "Permiso de ubicación denegado" : "No se pudo obtener la ubicación");
+    pararGeo();
+  }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+  return true;
+}
+function pararGeo() {
+  if (vigilando !== null) navigator.geolocation.clearWatch(vigilando);
+  vigilando = null; esperandoRuta = null; btnGeo.classList.remove("activo");
+  if (yo) { mapa.removeLayer(yo); mapa.removeLayer(precision); yo = precision = null; }
+  posicion = null;
+}
+
+let btnGeo;
+const ctrlGeo = L.control({ position: "topleft" });
+ctrlGeo.onAdd = () => {
+  btnGeo = L.DomUtil.create("button", "boton");
+  btnGeo.title = "Mi ubicación"; btnGeo.innerHTML = "◎";
+  L.DomEvent.disableClickPropagation(btnGeo);
+  btnGeo.onclick = () => {
+    if (posicion) { mapa.setView(posicion, Math.max(mapa.getZoom(), 14)); return; }
+    centrarAlLlegar = true;
+    if (iniciarGeo()) aviso("Buscando tu ubicación…");
+  };
+  return btnGeo;
+};
+ctrlGeo.addTo(mapa);
+
+// ---------- Ruta ----------
+let capaRuta = null, esperandoRuta = null;
+
+mapa.on("popupopen", e => {
+  const b = e.popup.getElement().querySelector("[data-ruta]");
+  if (b) b.onclick = () => { mapa.closePopup(); calcularRuta(+b.dataset.ruta); };
+});
+
+async function calcularRuta(i) {
+  const m = todos[i], destino = m.getLatLng();
+  if (!posicion) {
+    esperandoRuta = i;
+    if (iniciarGeo()) aviso("Obteniendo tu ubicación para calcular la ruta…", 8000);
+    return;
+  }
+  aviso("Calculando ruta…", 15000);
+  const url = `https://router.project-osrm.org/route/v1/driving/${posicion.lng},${posicion.lat};${destino.lng},${destino.lat}?overview=full&geometries=geojson`;
+  let ruta;
+  try {
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j.code !== "Ok" || !j.routes?.length) throw new Error(j.message || j.code);
+    ruta = j.routes[0];
+  } catch (e) {
+    aviso("No se pudo calcular la ruta: " + e.message, 6000);
+    return;
+  }
+  document.getElementById("aviso").style.display = "none";
+  if (capaRuta) mapa.removeLayer(capaRuta);
+  const linea = ruta.geometry.coordinates.map(([x, y]) => [y, x]);
+  const fin = linea[linea.length - 1];
+  capaRuta = L.layerGroup([
+    L.polyline(linea, { color: "#fff", weight: 9, opacity: .9 }),
+    L.polyline(linea, { color: "#1a73e8", weight: 5 }),
+    // tramo final a pie desde la carretera más cercana hasta el punto
+    L.polyline([fin, [destino.lat, destino.lng]], { color: "#1a73e8", weight: 3, dashArray: "6 6" })
+  ]).addTo(mapa);
+  mapa.fitBounds(L.latLngBounds(linea).extend(destino).pad(0.15));
+
+  const km = ruta.distance / 1000, min = Math.round(ruta.duration / 60);
+  const tiempo = min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min` : `${min} min`;
+  document.getElementById("ruta-destino").innerHTML = `Ruta a <b>${esc(m.datos["CODIGO OFICIAL"])}</b> · ${esc(m.datos["TERMINO MUNICIPAL"])}`;
+  document.getElementById("ruta-datos").textContent = `${km.toFixed(km < 10 ? 1 : 0).replace(".", ",")} km · ${tiempo}`;
+  document.getElementById("ruta-navegar").href =
+    `https://www.google.com/maps/dir/?api=1&origin=${posicion.lat},${posicion.lng}&destination=${destino.lat},${destino.lng}&travelmode=driving`;
+  document.getElementById("ruta").style.display = "block";
+  document.body.classList.add("con-ruta");
+}
+
+document.getElementById("ruta-quitar").onclick = () => {
+  if (capaRuta) mapa.removeLayer(capaRuta);
+  capaRuta = null;
+  document.getElementById("ruta").style.display = "none";
+  document.body.classList.remove("con-ruta");
+};
+
+cargarCapa().catch(e => aviso(e.message, 10000));
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
