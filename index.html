@@ -15,7 +15,11 @@
 <style>
   :root { --azul: #1f4e79; }
   html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #fff; }
-  #mapa { position: absolute; inset: 0; }
+  #mapa { position: absolute; inset: 0; background: #fff; }
+  .opacidad { padding: 6px 8px; }
+  .opacidad label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .opacidad input { width: 90px; margin: 0; }
+  .opacidad span { min-width: 34px; text-align: right; color: #555; }
   .panel { background: #fff; border-radius: 8px; box-shadow: 0 1px 6px rgba(0,0,0,.3); padding: 8px 10px; font-size: 13px; }
   .leyenda .fila { display: flex; align-items: center; gap: 6px; margin: 3px 0; cursor: pointer; user-select: none; }
   .leyenda .fila.off { opacity: .35; }
@@ -73,6 +77,19 @@ const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   { maxZoom: 19, attribution: "© OpenStreetMap" });
 pnoa.addTo(mapa);
 L.control.layers({ "PNOA máxima actualidad": pnoa, "MTN25": mtn, "OpenStreetMap": osm }, null, { position: "topright" }).addTo(mapa);
+
+// Transparencia del fondo (se aplica a los tres y se mantiene al cambiar de fondo)
+const fondos = [pnoa, mtn, osm];
+const ctrlOpacidad = L.control({ position: "topright" });
+ctrlOpacidad.onAdd = () => {
+  const d = L.DomUtil.create("div", "panel opacidad");
+  d.innerHTML = '<label title="Transparencia del fondo">Fondo <input type="range" min="0" max="100" value="100"> <span>100 %</span></label>';
+  L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d);
+  const r = d.querySelector("input"), s = d.querySelector("span");
+  r.oninput = () => { fondos.forEach(f => f.setOpacity(r.value / 100)); s.textContent = r.value + " %"; };
+  return d;
+};
+ctrlOpacidad.addTo(mapa);
 L.control.scale({ imperial: false }).addTo(mapa);
 
 function aviso(txt, ms = 4000) {
