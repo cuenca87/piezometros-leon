@@ -1,6 +1,6 @@
 // Red primero para la app y la capa; copia en caché para abrir sin cobertura
-const CACHE = "piezometros-leon-v4";
-const PROPIOS = ["./", "index.html", "ACTUACIONES_25830.fgb", "manifest.json", "icon.svg"];
+const CACHE = "piezometros-leon-v5";
+const PROPIOS = ["./", "index.html", "ACTUACIONES_25830.fgb", "manifest.json", "icon.svg", "provincia_leon.geojson"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(PROPIOS))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))));

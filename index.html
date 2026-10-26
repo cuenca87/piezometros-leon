@@ -79,7 +79,16 @@ const mtn = L.tileLayer.wms("https://www.ign.es/wms-inspire/mapa-raster",
 const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   { maxZoom: 19, attribution: "© OpenStreetMap" });
 pnoa.addTo(mapa);
-L.control.layers({ "PNOA máxima actualidad": pnoa, "MTN25": mtn, "OpenStreetMap": osm }, null, { position: "topright" }).addTo(mapa);
+// Límite provincial (IGN, simplificado) por debajo de los puntos
+mapa.createPane("limite").style.zIndex = 350;
+const limite = L.layerGroup().addTo(mapa);
+fetch("provincia_leon.geojson").then(r => r.json()).then(g => {
+  L.geoJSON(g, { pane: "limite", interactive: false, style: { color: "#fff", weight: 5, opacity: .8, fill: false } }).addTo(limite);
+  L.geoJSON(g, { pane: "limite", interactive: false, style: { color: "#c0392b", weight: 2.5, fill: false } }).addTo(limite);
+}).catch(() => {});
+
+L.control.layers({ "PNOA máxima actualidad": pnoa, "MTN25": mtn, "OpenStreetMap": osm },
+                 { "Provincia de León": limite }, { position: "topright" }).addTo(mapa);
 
 // Transparencia del fondo (se aplica a los tres y se mantiene al cambiar de fondo)
 const fondos = [pnoa, mtn, osm];
