@@ -16,6 +16,9 @@
   :root { --azul: #1f4e79; }
   html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #fff; }
   #mapa { position: absolute; inset: 0; background: #fff; }
+  .leaflet-tooltip.etiqueta { background: rgba(255,255,255,.85); border: none; box-shadow: none; padding: 0 4px; font-size: 11px; font-weight: 600; color: #222; border-radius: 3px; }
+  .leaflet-tooltip.etiqueta::before { display: none; }
+  .sin-etiquetas .leaflet-tooltip.etiqueta { display: none; }
   .opacidad { padding: 6px 8px; }
   .opacidad label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
   .opacidad input { width: 90px; margin: 0; }
@@ -147,14 +150,20 @@ async function cargarCapa() {
   feats.forEach((f, i) => {
     const p = f.properties;
     const [lon, lat] = proj4("EPSG:25830", "EPSG:4326", f.geometry.coordinates);
+    // Etiqueta fija con el código; las de puntos en el mismo sitio (< 15 m) se apilan
+    const [x, y] = f.geometry.coordinates;
+    const apilado = todos.filter(o => Math.hypot(o.datos.X - x, o.datos.Y - y) < 15).length;
     const m = L.circleMarker([lat, lon], { radius: 8, color: "#fff", weight: 2, fillColor: color(p.ACTUACION), fillOpacity: .95 })
-      .bindTooltip(esc(txt(p["CODIGO OFICIAL"])), { direction: "top", offset: [0, -6] });
+      .bindTooltip(esc(txt(p["CODIGO OFICIAL"])), { permanent: true, direction: "right", offset: [8, apilado * 15], className: "etiqueta" });
     m.on("click", () => abrirFicha(m));
     m.datos = p;
     todos.push(m);
     (grupos[p.ACTUACION] ||= L.featureGroup().addTo(mapa)).addLayer(m);
   });
   mapa.fitBounds(L.featureGroup(todos).getBounds().pad(0.1));
+  // con toda la provincia a la vista las etiquetas se amontonan: se muestran desde el zoom 10
+  const verEtiquetas = () => mapa.getContainer().classList.toggle("sin-etiquetas", mapa.getZoom() < 10);
+  mapa.on("zoomend", verEtiquetas); verEtiquetas();
   leyenda();
 }
 
