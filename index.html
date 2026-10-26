@@ -28,6 +28,7 @@
   .popup table { border-collapse: collapse; font-size: 12px; }
   .popup td { padding: 1px 6px 1px 0; vertical-align: top; }
   .popup td:first-child { color: #666; white-space: nowrap; }
+  .popup hr.sep { border: none; border-top: 1px solid #ddd; margin: 8px 0; }
   .popup ul { margin: 4px 0 6px; padding-left: 18px; font-size: 12px; }
   .popup .accion { display: block; width: 100%; margin-top: 6px; padding: 8px; border: none; border-radius: 6px; background: var(--azul); color: #fff; font-size: 14px; cursor: pointer; }
   #ruta { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 1000; display: none; min-width: 260px; max-width: calc(100% - 32px); }
@@ -85,18 +86,40 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 const grupos = {};
 let todos = [];
 
-function popupHtml(p, i) {
-  const tareas = Object.keys(p).filter(k => !FIJOS.includes(k) && String(p[k]).trim() !== "");
-  const filas = [["Código", p["CODIGO OFICIAL"]], ["Municipio", p["TERMINO MUNICIPAL"]], ["Confederación", p["C.H"]],
-                 ["X / Y (ETRS89 H30)", `${p.X} / ${p.Y}`]]
-    .map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join("");
-  return `<div class="popup">
-    <h3>${esc(p["CODIGO OFICIAL"])}</h3>
-    <span class="etq" style="background:${color(p.ACTUACION)}">${esc(nombre(p.ACTUACION))}</span>
-    <table>${filas}</table>
-    ${tareas.length ? `<div style="margin-top:6px;font-size:12px;color:#666">Trabajos</div><ul>${tareas.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
-    <button class="accion" data-ruta="${i}">🚗 Cómo llegar</button>
-  </div>`;
+const txt = v => String(v ?? "").trim();
+// Mantenimiento trae TERMINO MUNICIPAL; Automatización y Nuevos piezómetros, Municipio
+const municipio = p => txt(p["TERMINO MUNICIPAL"]) || txt(p.Municipio);
+const xy = p => `${p.X} / ${p.Y}`;
+
+function fichaHtml(p) {
+  const a = p.ACTUACION;
+  let filas, trabajos = [];
+  if (a === "Nuevos Piezometros") {
+    const prof = txt(p["Profundidad (m)"]);
+    filas = [["Municipio", municipio(p)], ["Tipo de perforación", txt(p["Tipo perforacion"])],
+             ["Profundidad", prof && prof.replace(".", ",") + " m"]];
+  } else if (a === "Automatizacion") {
+    filas = [["Municipio", municipio(p)], ["ID TTEC", txt(p.IDTTEC)], ["Confederación", txt(p["C.H"])], ["X / Y (ETRS89 H30)", xy(p)]];
+  } else {
+    filas = [["Municipio", municipio(p)], ["Confederación", txt(p["C.H"])], ["X / Y (ETRS89 H30)", xy(p)]];
+    if (a === "Mantenimiento") trabajos = Object.keys(p).filter(k => !FIJOS.includes(k) && txt(p[k]).toUpperCase() === "X");
+  }
+  return `<h3>${esc(txt(p["CODIGO OFICIAL"]))}</h3>
+    <span class="etq" style="background:${color(a)}">${esc(nombre(a))}</span>
+    <table>${filas.map(([k, v]) => `<tr><td>${k}</td><td>${esc(v || "—")}</td></tr>`).join("")}</table>
+    ${trabajos.length ? `<div style="margin-top:6px;font-size:12px;color:#666">Trabajos</div><ul>${trabajos.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}`;
+}
+
+// Hay puntos de distinta actuación en el mismo sitio: se muestran todos los que caen bajo el clic
+function abrirFicha(m) {
+  const pt = mapa.latLngToContainerPoint(m.getLatLng());
+  const juntos = [m, ...todos.filter(o => o !== m && mapa.hasLayer(o) &&
+                  mapa.latLngToContainerPoint(o.getLatLng()).distanceTo(pt) < 12)];
+  L.popup({ maxWidth: 280, maxHeight: Math.round(window.innerHeight * 0.6) })
+    .setLatLng(m.getLatLng())
+    .setContent(`<div class="popup">${juntos.map(o => fichaHtml(o.datos)).join('<hr class="sep">')}
+      <button class="accion" data-ruta="${todos.indexOf(m)}">🚗 Cómo llegar</button></div>`)
+    .openOn(mapa);
 }
 
 async function cargarCapa() {
@@ -108,8 +131,8 @@ async function cargarCapa() {
     const p = f.properties;
     const [lon, lat] = proj4("EPSG:25830", "EPSG:4326", f.geometry.coordinates);
     const m = L.circleMarker([lat, lon], { radius: 8, color: "#fff", weight: 2, fillColor: color(p.ACTUACION), fillOpacity: .95 })
-      .bindPopup(popupHtml(p, i), { maxWidth: 280 })
-      .bindTooltip(esc(p["CODIGO OFICIAL"]), { direction: "top", offset: [0, -6] });
+      .bindTooltip(esc(txt(p["CODIGO OFICIAL"])), { direction: "top", offset: [0, -6] });
+    m.on("click", () => abrirFicha(m));
     m.datos = p;
     todos.push(m);
     (grupos[p.ACTUACION] ||= L.featureGroup().addTo(mapa)).addLayer(m);
@@ -221,7 +244,7 @@ async function calcularRuta(i) {
 
   const km = ruta.distance / 1000, min = Math.round(ruta.duration / 60);
   const tiempo = min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min` : `${min} min`;
-  document.getElementById("ruta-destino").innerHTML = `Ruta a <b>${esc(m.datos["CODIGO OFICIAL"])}</b> · ${esc(m.datos["TERMINO MUNICIPAL"])}`;
+  document.getElementById("ruta-destino").innerHTML = `Ruta a <b>${esc(txt(m.datos["CODIGO OFICIAL"]))}</b> · ${esc(municipio(m.datos))}`;
   document.getElementById("ruta-datos").textContent = `${km.toFixed(km < 10 ? 1 : 0).replace(".", ",")} km · ${tiempo}`;
   document.getElementById("ruta-navegar").href =
     `https://www.google.com/maps/dir/?api=1&origin=${posicion.lat},${posicion.lng}&destination=${destino.lat},${destino.lng}&travelmode=driving`;
